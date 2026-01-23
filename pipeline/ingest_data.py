@@ -1,20 +1,14 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-
+import click
 import pandas as pd
 from sqlalchemy import create_engine
 from tqdm.auto import tqdm
 
-#pd.__file__
+PREFIX = "https://github.com/DataTalksClub/nyc-tlc-data/releases/download/yellow/"
 
-prefix = 'https://github.com/DataTalksClub/nyc-tlc-data/releases/download/yellow/'
-
-
-
-url = f"{prefix} + yellow_tripdata_2021-01.csv.gz"
-
-dtype = {
+DTYPE = {
     "VendorID": "Int64",
     "passenger_count": "Int64",
     "trip_distance": "float64",
@@ -30,143 +24,76 @@ dtype = {
     "tolls_amount": "float64",
     "improvement_surcharge": "float64",
     "total_amount": "float64",
-    "congestion_surcharge": "float64"
+    "congestion_surcharge": "float64",
 }
 
-parse_dates = [
-    "tpep_pickup_datetime",
-    "tpep_dropoff_datetime"
-]
-
-df = pd.read_csv(
-    prefix + 'yellow_tripdata_2021-01.csv.gz',
-    dtype=dtype,
-    parse_dates=parse_dates,
-    nrows=1000
-
-)
-
-
-# In[74]:
-
-
-# Read a sample of the data
-#prefix = 'https://github.com/DataTalksClub/nyc-tlc-data/releases/download/yellow/'
-#df = pd.read_csv(prefix + 'yellow_tripdata_2021-01.csv.gz') #, nrows=100)
-
-# Display first rows
-df.head()
-
-
-# In[27]:
-
-
-# Check data types
-df.dtypes
-
-
-# In[16]:
-
-
-# Check data shape
-df.shape
-
-
-# In[17]:
-
-
-df.info()
-
-
-# In[18]:
-
-
-print(df.isnull().sum())
-
-
-# In[21]:
-
-
-df['VendorID']
-
-
-# In[20]:
-
-
-pd.to_numeric(df['VendorID'], errors='coerce')
-
-
-# In[28]:
-
-
-#get_ipython().system('uv add sqlalchemy psycopg2-binary')
-
-
-# In[75]:
-
-
-
-# In[76]:
-
-
-df.head(0).to_sql
-
-
-
+PARSE_DATES = ["tpep_pickup_datetime", "tpep_dropoff_datetime"]
 
 
 def run(
-    year = 2021,
-    month = 1,
-    chunksize = 100000,
-
-    pg_pass = 'root',
-    pg_host = 'localhost',
-    pg_user = 'root',
-    pg_db = 'ny_taxi',
-    target_table = 'yellow_taxi_data',
-    pg_port = 5432
+    year: int,
+    month: int,
+    chunksize: int,
+    pg_pass: str,
+    pg_host: str,
+    pg_user: str,
+    pg_db: str,
+    target_table: str,
+    pg_port: int,
 ):
-    print(year, month)
+    url = f"{PREFIX}yellow_tripdata_{year}-{month:02d}.csv.gz"
+    click.echo(f"Reading: {url}")
 
-    engine = create_engine(f'postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}')
+    engine = create_engine(f"postgresql://{pg_user}:{pg_pass}@{pg_host}:{pg_port}/{pg_db}")
 
-    print(pd.io.sql.get_schema(df, name='yellow_taxi_data', con=engine))
-
+    # iterator over remote CSV
     df_iter = pd.read_csv(
-        prefix + 'yellow_tripdata_2021-01.csv.gz',
-        dtype=dtype,
-        parse_dates=parse_dates,
+        url,
+        dtype=DTYPE,
+        parse_dates=PARSE_DATES,
         iterator=True,
-        chunksize=chunksize
+        chunksize=chunksize,
     )
 
     first = True
-    for df_chunk in tqdm(df_iter):
+    total = 0
+
+    for df_chunk in tqdm(df_iter, desc="Ingesting"):
         if first:
-            df_chunk.head(0).to_sql(name=target_table, con=engine, if_exists='replace')
-    
-    
+            # create/replace table schema
+            df_chunk.head(0).to_sql(
+                name=target_table,
+                con=engine,
+                if_exists="replace",
+                index=False,
+            )
             first = False
-    
-#        df_chunk.to_sql(name=target_table, con=engine, if_exists='append')
+
+        df_chunk.to_sql(
+            name=target_table,
+            con=engine,
+            if_exists="append",
+            index=False,
+        )
+        total += len(df_chunk)
+
+    click.echo(f"Done. Inserted {total} rows into '{target_table}'.")
 
 
-        for df_chunk in tqdm(df_iter):
-            df_chunk.to_sql(name='yellow_taxi_data', con=engine, if_exists='append')
-            print('Inserted;', len(df_chunk))
+@click.command()
+@click.option("--year", default=2021, type=int, show_default=True)
+@click.option("--month", default=1, type=click.IntRange(1, 12), show_default=True)
+@click.option("--chunksize", default=100000, type=int, show_default=True)
+@click.option("--pg-pass", "pg_pass", default="root", show_default=True)
+@click.option("--pg-host", "pg_host", default="localhost", show_default=True)
+@click.option("--pg-user", "pg_user", default="root", show_default=True)
+@click.option("--pg-db", "pg_db", default="ny_taxi", show_default=True)
+@click.option("--target-table", "target_table", default="yellow_taxi_data", show_default=True)
+@click.option("--pg-port", "pg_port", default=5432, type=int, show_default=True)
+def main(year, month, chunksize, pg_pass, pg_host, pg_user, pg_db, target_table, pg_port):
+    """Ingest NYC Yellow Taxi CSV data into Postgres."""
+    run(year, month, chunksize, pg_pass, pg_host, pg_user, pg_db, target_table, pg_port)
 
 
-if __name__=='__main__':
-    run()
-# In[88]:
-
-
-
-
-
-# In[ ]:
-
-
-
-
+if __name__ == "__main__":
+    main()
